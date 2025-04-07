@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: sans-serif;
+  background-color: #f7fafc; /* Optional: Light gray background */
+}
+
+/* Add specific styles if needed */
+.card {
+  @apply border border-gray-400 rounded shadow-md p-4 h-24 flex items-center justify-center text-center font-semibold uppercase break-words cursor-pointer transition-all duration-300 select-none;
+}
+
+.card-covered {
+  @apply bg-codenames-covered text-gray-800 hover:bg-gray-300;
+}
+
+.card-revealed {
+   @apply text-white shadow-lg scale-105; /* Make revealed cards pop a bit */
+   cursor: default;
+}
+
+.card-red { @apply bg-codenames-red; }
+.card-blue { @apply bg-codenames-blue; }
+.card-neutral { @apply bg-codenames-neutral text-black; }
+.card-assassin { @apply bg-codenames-assassin; }
+
+/* Highlight for current team's cards for Spymaster */
+.spymaster-highlight-red {
+    @apply ring-4 ring-offset-1 ring-red-500;
+}
+.spymaster-highlight-blue {
+     @apply ring-4 ring-offset-1 ring-blue-500;
+}
