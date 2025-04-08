@@ -84,8 +84,8 @@ function Controls({ gameState, currentPlayer, players, isSpymaster, isMyTurn, sh
                             id="clueWord"
                             type="text"
                             value={clueWord}
-                            onChange={(e) => setClueWord(e.target.value.replace(/\s/g, ''))} // Prevent spaces
-                            placeholder="One word only"
+                            onChange={(e) => setClueWord(e.target.value)}
+                            placeholder="Enter your clue"
                             className="w-full px-2 py-1 border border-gray-300 rounded shadow-sm"
                             required
                         />
