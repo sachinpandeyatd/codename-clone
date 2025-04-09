@@ -1,10 +1,14 @@
 import React from 'react';
+import { HandRaisedIcon } from '@heroicons/react/24/solid'; // For hand icon for voting
 
-function Card({ cardData, onClick, isSpymaster, showSpymasterView, isGuesser, canGuess, currentTurnTeam }) {
+function Card({ cardIndex, cardData, onVote, onConfirmGuess, votes, players, playerId, 
+        isSpymaster, showSpymasterView, isGuesser, canVoteOrGuess, currentTurnTeam}) {
     const { word, type, revealed, revealedBy } = cardData;
 
     const isVisibleToSpymaster = isSpymaster && showSpymasterView;
     const isRevealed = revealed;
+    const currentVotes = votes || []; // votes is always an array, since multiple players will be doing it
+    const playerHasVoted = currentVotes.includes(playerId);
 
     // Determine base styles, colors, text, cursor, and highlights
     let bgColor = '';
@@ -51,7 +55,7 @@ function Card({ cardData, onClick, isSpymaster, showSpymasterView, isGuesser, ca
         bgColor = 'bg-codenames-covered'; // Apply the gray background
         textColor = 'text-gray-800'; // Standard text color for covered cards
 
-        if (isGuesser && canGuess) {
+        if (isGuesser && canVoteOrGuess) {
             cursorStyle = 'cursor-pointer';
             hoverEffect = 'hover:bg-gray-300'; // Only guessers get hover effect when it's their turn
         } else {
@@ -59,29 +63,63 @@ function Card({ cardData, onClick, isSpymaster, showSpymasterView, isGuesser, ca
         }
     }
 
-    // Construct the final classes
-    const cardClasses = `card
+    // Construct the final classes for the main card div
+    const cardClasses = `card relative flex flex-col justify-between min-h-[120px] // Adjust min-height as needed
         ${baseCardStyle}
         ${bgColor}
         ${textColor}
-        ${hoverEffect}
+        ${!isRevealed && isGuesser && canVoteOrGuess ? hoverEffect : ''} // Apply hover only when vote is possible
         ${cursorStyle}
-        ${isVisibleToSpymaster && !isRevealed ? spymasterHighlight : ''} // Ring highlight only for Spymaster unrevealed
-        ${isRevealed && revealedBy ? (revealedBy === 'RED' ? 'ring-2 ring-offset-1 ring-red-700' : 'ring-2 ring-offset-1 ring-blue-700') : ''} // Ring for team that revealed
+        ${isVisibleToSpymaster && !isRevealed ? spymasterHighlight : ''}
+        ${isRevealed && revealedBy ? (revealedBy === 'RED' ? 'ring-2 ring-offset-1 ring-red-700' : 'ring-2 ring-offset-1 ring-blue-700') : ''}
+        ${!isRevealed && playerHasVoted ? 'ring-2 ring-offset-1 ring-green-500' : ''} // Highlight if current player voted
     `;
 
-    // Determine if the card should be clickable
-    // Clickable ONLY if it's an unrevealed card, for a guesser, during their turn, when guessing is allowed
-    const isClickable = !isRevealed && isGuesser && canGuess && !isVisibleToSpymaster;
+    // Determine if the main card area should trigger a vote
+    const isVoteClickable = !isRevealed && isGuesser && canVoteOrGuess && !isVisibleToSpymaster;
+
+    // Handle confirmation click - stop propagation to prevent voting
+    const handleConfirmClick = (e) => {
+        e.stopPropagation(); // Prevent click from triggering onVote on the parent div
+        onConfirmGuess(); // Call the confirmation handler passed from Game.jsx
+    };
+
+    // Function to get player names safely
+    const getPlayerName = (pId) => players[pId]?.name || '...';
 
     return (
         <div
             className={cardClasses}
             // Only attach onClick handler if it's actually clickable
-            onClick={isClickable ? onClick : undefined}
-            aria-disabled={!isClickable} // Accessibility hint
+            onClick={isVoteClickable ? onVote : undefined} // Main click triggers vote
+            aria-disabled={!isVoteClickable} // Accessibility hint
         >
-            {word}
+            {/* Word display */}
+            <div className="flex-grow flex items-center justify-center text-center font-semibold uppercase break-words px-1">
+                {word}
+            </div>
+
+            {/* --- Voter Names Display --- */}
+            {/* Only show votes on unrevealed cards and not in spymaster key view */}
+            {!isRevealed && !isVisibleToSpymaster && currentVotes.length > 0 && (
+                <div className="text-xs text-gray-600 bg-black bg-opacity-10 rounded px-1 py-0.5 mt-1 w-full text-center truncate">
+                   Votes: {currentVotes.map(getPlayerName).join(', ')}
+                </div>
+            )}
+
+
+            {/* --- Confirmation Button (Hand Icon) --- */}
+            {/* Show only if: not revealed, guesser can guess, *this* player has voted */}
+            {!isRevealed && isGuesser && canVoteOrGuess && playerHasVoted && !isVisibleToSpymaster && (
+                <button
+                    title="Confirm this guess for the team"
+                    onClick={handleConfirmClick}
+                    className="absolute top-1 right-1 p-1 bg-green-600 text-white rounded-full shadow hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-1"
+                    aria-label={`Confirm guess for ${word}`}
+                >
+                    <HandRaisedIcon className="w-4 h-4" />
+                </button>
+            )}
         </div>
     );
 }

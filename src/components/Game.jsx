@@ -68,8 +68,7 @@ function initializeGame(players) {
             blue: blueCardsCount,
         },
         status: 'PLAYING', // LOBBY, PLAYING, RED_WON, BLUE_WON, ASSASSIN_HIT_RED, ASSASSIN_HIT_BLUE
-        // Optional Timer State (if implemented)
-        // timer: { startTime: null, duration: 60 }
+        votes: {},
     };
 }
 
@@ -126,17 +125,6 @@ function Game({ roomId, playerId, playerName, navigate }) {
         return () => {
             unsubscribeGameState();
             unsubscribePlayers();
-
-            // Optional: Remove player if they leave the page?
-            // Be careful with this - maybe only if they are the last player?
-            // get(playersRef).then(snapshot => {
-            //     const currentPlayers = snapshot.val();
-            //     if (currentPlayers && Object.keys(currentPlayers).length === 1 && currentPlayers[playerId]) {
-            //         remove(roomRef); // Remove entire room if last player leaves
-            //     } else {
-            //        remove(playerRef); // Remove just this player
-            //     }
-            // });
         };
     }, [roomId, playerId, playerName]); // Rerun if roomId or playerId changes
 
@@ -188,44 +176,69 @@ function Game({ roomId, playerId, playerName, navigate }) {
     }, [roomId, players]);
 
     const handleClueSubmit = useCallback((clueWord, clueNumber) => {
-        if (!isSpymaster || !isMyTurn || gameState.status !== 'PLAYING') return;
+        console.log("handleClueSubmit triggered. Spymaster:", playerId, "Clue:", clueWord, "Number:", clueNumber);
+
+        console.log("--- Debugging Clue Submit Validation ---");
+    console.log("Current Player ID:", playerId);
+    console.log("Current Player Object:", currentPlayer); // Log the whole player object
+    console.log("Is Spymaster?", isSpymaster);
+    console.log("Is My Turn?", isMyTurn);
+    console.log("Game State Object:", gameState); // Log the whole gameState
+    console.log("Game Status:", gameState?.status);
+    console.log("Current Turn:", gameState?.turn);
+    console.log("My Team:", currentPlayer?.team);
+        if (!isSpymaster || !isMyTurn || gameState.status !== 'PLAYING'){
+            console.warn("Clue submission blocked: Not spymaster's turn or invalid state."); 
+            return;
+        } 
 
         const clueNum = parseInt(clueNumber, 10);
         if (!clueWord.trim() || isNaN(clueNum) || clueNum < 0) {
-            alert("Invalid clue. Enter a word and a non-negative number.");
+            console.warn("Clue submission blocked: Invalid input.");
+        alert("Invalid clue. Enter clue word(s) and a non-negative number.");
             return;
         }
 
-        update(getGameStateRef(roomId), {
+        const gameStateRef = getGameStateRef(roomId);
+        const updates = {
             clue: { word: clueWord.trim().toUpperCase(), number: clueNum, submittedBy: playerId },
             guessesMade: 0,
-            guessesRemaining: clueNum === 0 ? 1 : clueNum + 1 // Allow 1 guess for 0 clue, else number + 1
-        }).catch(err => console.error("Error submitting clue:", err));
+            guessesRemaining: clueNum === 0 ? 1 : clueNum + 1, // Allow 1 guess for 0 clue, else number + 1
+            votes: null // Clear votes when a new clue is submitted
+        };
 
-    }, [roomId, gameState, isSpymaster, isMyTurn, playerId]);
+
+        update(gameStateRef, updates)
+        .then(() => {
+            console.log("Firebase gameState update successful for clue submission.");
+        })
+        .catch(err => {
+            console.error("!!!!!!!! Firebase clue update FAILED: !!!!!!!!", err);
+            alert(`Failed to submit clue. Check console for error. (${err.message})`);
+        });
+
+    }, [roomId, playerId, gameState, currentPlayer]);
 
 
-    const handleCardClick = useCallback((cardIndex) => {
-        if (!isGuesser || !isMyTurn || gameState.status !== 'PLAYING' || !gameState.clue?.word || gameState.guessesRemaining <= 0) {
-            console.log("Cannot guess now:", { isGuesser, isMyTurn, status: gameState?.status, clue: gameState?.clue, guessesRemaining: gameState?.guessesRemaining });
-            return; // Not allowed to guess
-        }
-
-        const card = gameState.board[cardIndex];
-        if (card.revealed) return; // Already revealed
+    const processConfirmedGuess = useCallback((cardIndex) => {
+        const card = gameState?.board?.[cardIndex];
+        if (!card || card.revealed || gameState?.status !== 'PLAYING') return;
 
         const updates = {};
         const currentTeam = gameState.turn;
         const opponentTeam = currentTeam === 'RED' ? 'BLUE' : 'RED';
         let nextTurn = currentTeam;
         let gameEndStatus = null;
-        let remainingGuesses = gameState.guessesRemaining - 1;
-        let guessesMade = gameState.guessesMade + 1;
+        // Guesses remaining decreases *only* on confirmation
+        let remainingGuesses = (gameState.guessesRemaining ?? 0) - 1;
+        // This 'guessesMade' might track confirmed guesses per turn, or total clicks? Let's treat it as CONFIRMED guesses.
+        let guessesMade = (gameState.guessesMade ?? 0) + 1;
 
         // Reveal the card
         updates[`board/${cardIndex}/revealed`] = true;
         updates[`board/${cardIndex}/revealedBy`] = currentTeam;
-        updates['guessesMade'] = guessesMade;
+        updates['guessesMade'] = guessesMade; // Increment confirmed guesses
+        updates['votes'] = null; // <--- Clear all votes after confirmation
 
         // Update Score and Check Win/Loss/Turn End
         let newScore = { ...gameState.score };
@@ -235,7 +248,7 @@ function Game({ roomId, playerId, playerName, navigate }) {
             updates['score'] = newScore;
             if (newScore[currentTeam.toLowerCase()] === 0) {
                 gameEndStatus = `${currentTeam}_WON`;
-            } else if (remainingGuesses === 0) {
+            } else if (remainingGuesses <= 0) { // Check if guesses are exhausted AFTER this guess
                 nextTurn = opponentTeam; // End turn if out of guesses
             }
             // else: continue guessing
@@ -259,6 +272,7 @@ function Game({ roomId, playerId, playerName, navigate }) {
             updates['clue'] = { word: null, number: null, submittedBy: null };
             updates['guessesRemaining'] = null;
             updates['turn'] = null;
+            updates['guessesMade'] = 0; // Reset on game end
         } else {
             // If turn changes, reset clue and guesses
             if (nextTurn !== currentTeam) {
@@ -267,13 +281,46 @@ function Game({ roomId, playerId, playerName, navigate }) {
                 updates['guessesRemaining'] = null;
                 updates['guessesMade'] = 0; // Reset guesses made for next turn
             } else {
-                 updates['guessesRemaining'] = remainingGuesses; // Just update remaining guesses
+                 // Only update remaining guesses if turn doesn't change
+                 updates['guessesRemaining'] = remainingGuesses;
             }
         }
 
         // Perform the update
         update(getGameStateRef(roomId), updates)
             .catch(err => console.error("Error processing guess:", err));
+
+    }, [roomId, gameState]);
+
+
+    const handleVote = useCallback((cardIndex) => {
+        if (!isGuesser || !isMyTurn || gameState.status !== 'PLAYING' || !gameState.clue?.word) {
+            console.log("Cannot vote now");
+            return; // Only active guessers on their turn with a clue can vote
+        }
+
+        const card = gameState?.board?.[cardIndex];
+        if (!card || card.revealed) return; // Can't vote on revealed cards
+
+        const currentVotesForCard = gameState.votes?.[cardIndex] || [];
+        const playerIndexInVotes = currentVotesForCard.indexOf(playerId);
+        let newVotesForCard;
+
+        if (playerIndexInVotes > -1) {
+            // Player already voted for this card, remove vote (unvote)
+            newVotesForCard = currentVotesForCard.filter(id => id !== playerId);
+        } else {
+            // Player hasn't voted for this card, add vote
+            newVotesForCard = [...currentVotesForCard, playerId];
+        }
+
+        // Prepare update for Firebase
+        const voteUpdate = {};
+        // Use null to remove the node if the array becomes empty, cleaning up Firebase
+        voteUpdate[`votes/${cardIndex}`] = newVotesForCard.length > 0 ? newVotesForCard : null;
+
+        update(getGameStateRef(roomId), voteUpdate)
+            .catch(err => console.error("Error updating votes:", err));
 
     }, [roomId, gameState, isGuesser, isMyTurn, playerId]);
 
@@ -286,7 +333,8 @@ function Game({ roomId, playerId, playerName, navigate }) {
              turn: opponentTeam,
              clue: { word: null, number: null, submittedBy: null },
              guessesRemaining: null,
-             guessesMade: 0
+             guessesMade: 0,
+             votes: null
          }).catch(err => console.error("Error ending turn:", err));
     }, [roomId, gameState, isGuesser, isMyTurn]);
 
@@ -392,17 +440,21 @@ function Game({ roomId, playerId, playerName, navigate }) {
             />
             <GameBoard
                 board={gameState.board}
-                onCardClick={handleCardClick}
+                onVote={handleVote} // PROP for voting
+                onConfirmGuess={processConfirmedGuess} // <--- PROP for confirming
+                votes={gameState.votes || {}} // <--- Pass current votes
+                players={players} // <--- Pass players map for names
+                playerId={playerId} // <--- Pass current player ID
                 isSpymaster={isSpymaster}
                 showSpymasterView={showSpymasterView}
                 isGuesser={isGuesser}
-                canGuess={isMyTurn && isGuesser && !!gameState.clue?.word && gameState.guessesRemaining > 0}
+                canVoteOrGuess={isMyTurn && isGuesser && !!gameState.clue?.word && (gameState.guessesRemaining ?? 0) > 0}
                 currentTurnTeam={gameState.turn} // Pass current turn team for highlighting
             />
              <button onClick={handleLeaveRoom} className="mt-8 block mx-auto bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">
                 Leave Room
             </button>
-            {/* Optional: Display player list during game */}
+            {/* Display player list during game, will implement later */}
         </div>
     );
 }
