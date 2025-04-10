@@ -504,6 +504,8 @@ function Game({ roomId, playerId, playerName, navigate }) {
         );
     }
 
+
+    // --- PLAYING STATE ---
     if (gameState?.status === 'PLAYING') {
         return (
             // Use h-screen for full viewport height, flex-col for main layout
@@ -526,23 +528,38 @@ function Game({ roomId, playerId, playerName, navigate }) {
                     />
                 </div>
     
-                {/* Main Content Area (Panels, Board, Log) - Takes Remaining Height */}
-                {/* flex-grow allows this div to fill space, flex-row for horizontal items */}
-                {/* overflow-hidden prevents this row itself from causing page scroll */}
-                {/* min-h-0 is CRUCIAL for flex children that need to scroll */}
+                {/* Main Content Area: [Stacked Panels] | [Board] | [Log] */}
                 <div className="flex-grow flex flex-row gap-2 md:gap-4 overflow-hidden p-2 md:p-4 min-h-0">
+
+                    {/* Left Column: Stacked Team Panels */}
+                    {/* Fixed width, flex-col to stack, gap for spacing */}
+                    <div className="w-48 md:w-56 lg:w-60 flex-shrink-0 flex flex-col gap-4 min-h-0"> {/* Adjust width */}
     
-                    {/* Red Team Panel - Fixed width, allow internal scroll if needed */}
-                    {/* Removed h-full, added min-h-0 */}
-                    <div className="w-48 md:w-56 lg:w-64 flex-shrink-0 min-h-0"> {/* Example: Use fixed widths */}
-                        <TeamPanel
-                            teamColor="RED"
-                            players={players}
-                            score={gameState.score?.red ?? '?'}
-                            isCurrentTurn={gameState.turn === 'RED'}
-                            playerId={playerId}
-                            onSwitchTeam={handleSwitchTeam}
-                        />
+                        {/* Red Team Panel - Fixed width, allow internal scroll if needed */}
+                        {/* Removed h-full, added min-h-0 */}
+                        <div className="w-48 md:w-56 lg:w-60 flex-shrink-0 flex flex-col gap-4 min-h-0"> {/* Example: Use fixed widths */}
+                            <TeamPanel
+                                teamColor="RED"
+                                players={players}
+                                score={gameState.score?.red ?? '?'}
+                                isCurrentTurn={gameState.turn === 'RED'}
+                                playerId={playerId}
+                                onSwitchTeam={handleSwitchTeam}
+                            />
+                        </div>
+        
+                        {/* Blue Team Panel - Fixed width */}
+                        {/* Removed h-full, added min-h-0 */}
+                        <div className="flex-1 min-h-0"> {/* Example: Use fixed widths */}
+                            <TeamPanel
+                                teamColor="BLUE"
+                                players={players}
+                                score={gameState.score?.blue ?? '?'}
+                                isCurrentTurn={gameState.turn === 'BLUE'}
+                                playerId={playerId}
+                                onSwitchTeam={handleSwitchTeam}
+                            />
+                        </div>
                     </div>
     
                     {/* Game Board Area - Flexible width, allow internal scroll */}
@@ -565,26 +582,12 @@ function Game({ roomId, playerId, playerName, navigate }) {
                          />
                      </div>
     
-                    {/* Blue Team Panel - Fixed width */}
-                    {/* Removed h-full, added min-h-0 */}
-                     <div className="w-48 md:w-56 lg:w-64 flex-shrink-0 min-h-0"> {/* Example: Use fixed widths */}
-                        <TeamPanel
-                            teamColor="BLUE"
-                            players={players}
-                            score={gameState.score?.blue ?? '?'}
-                            isCurrentTurn={gameState.turn === 'BLUE'}
-                            playerId={playerId}
-                            onSwitchTeam={handleSwitchTeam}
-                        />
-                    </div>
-    
                      {/* Action Log Sidebar - Fixed width */}
                      {/* Removed h-full, added min-h-0 */}
                      {/* overflow-hidden okay here if ActionLog handles internal scroll */}
                      <div className="w-56 md:w-64 lg:w-72 flex-shrink-0 min-h-0"> {/* Example: Use fixed widths */}
                          <ActionLog logEntries={gameState.logEntries} />
                      </div>
-    
                 </div>
     
                  {/* Leave Room button - Fixed Height */}

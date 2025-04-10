@@ -42,18 +42,16 @@ function TeamPanel({ teamColor, players = {}, score = '?', isCurrentTurn, player
 
 
     return (
-        <div className={`flex flex-col items-center p-3 md:p-4 rounded-lg text-white ${bgColor} border-4 ${borderColor} ${shadow} transition-all duration-300 h-full`}>
+        <div className={`flex flex-col items-center p-3 rounded-lg text-white ${bgColor} border-4 ${borderColor} ${shadow} transition-all duration-300`}>
             {/* ... AvatarPlaceholder and Score ... */}
-             <AvatarPlaceholder teamColor={teamColor} />
-             <div className="text-4xl md:text-5xl font-bold mb-3 md:mb-5">{score}</div>
-
+            <AvatarPlaceholder teamColor={teamColor} score={score} />
 
             {/* Player Lists - Use the helper function */}
-            <div className="w-full text-left text-sm md:text-base space-y-3 overflow-y-auto px-1 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent">
+            <div className="w-full text-left text-xs md:text-sm space-y-2 overflow-y-auto px-1 py-2 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent">
                  <div>
                     <h4 className="font-semibold text-xs uppercase tracking-wider opacity-80 mb-1">Spymaster(s)</h4>
                     {spymasters.length > 0 ? (
-                        spymasters.map(renderPlayerName) // Use helper
+                        spymasters.map(renderPlayerName)
                     ) : (
                         <p className="text-xs italic opacity-60">None</p>
                     )}
@@ -61,7 +59,7 @@ function TeamPanel({ teamColor, players = {}, score = '?', isCurrentTurn, player
                  <div>
                     <h4 className="font-semibold text-xs uppercase tracking-wider opacity-80 mb-1">Operative(s)</h4>
                      {operatives.length > 0 ? (
-                        operatives.map(renderPlayerName) // Use helper
+                        operatives.map(renderPlayerName)
                     ) : (
                         <p className="text-xs italic opacity-60">None</p>
                     )}
