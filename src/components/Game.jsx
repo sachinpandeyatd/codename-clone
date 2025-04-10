@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { db, getRoomRef, getGameStateRef, getPlayersRef, getPlayerRef, update, set, remove } from '../firebase';
+import { db, getRoomRef, getGameStateRef, getPlayersRef, getPlayerRef, update, set, remove, get, child, serverTimestamp, push, getLogRef } from '../firebase'; // Added push, serverTimestamp, getLogRef
 import { onValue } from "firebase/database";
 import GameBoard from './GameBoard';
 import Controls from './Controls';
 import RoleSelector from './RoleSelector';
 import GameOver from './GameOver';
-import wordsData from '../words.json'; // Import the word list
-import { get } from "firebase/database";
+import ActionLog from './ActionLog';
+import wordsData from '../words.json';
+import { HandRaisedIcon } from '@heroicons/react/24/solid';
 
 // Fisher-Yates shuffle algorithm
 function shuffle(array) {
@@ -19,11 +20,11 @@ function shuffle(array) {
     return array;
 }
 
+// Updated Initialization Function
 function initializeGame(players) {
     const playerList = Object.values(players || {});
-    if (playerList.length < 4) return null; // Need at least 4 players
+    if (playerList.length < 4) return null;
 
-    // Basic validation: Ensure at least one spymaster per team
     const redSpymaster = playerList.find(p => p.team === 'RED' && p.role === 'SPYMASTER');
     const blueSpymaster = playerList.find(p => p.team === 'BLUE' && p.role === 'SPYMASTER');
     const redGuesser = playerList.find(p => p.team === 'RED' && p.role === 'GUESSER');
@@ -38,14 +39,12 @@ function initializeGame(players) {
     const startingTeam = Math.random() < 0.5 ? 'RED' : 'BLUE';
     const redCardsCount = startingTeam === 'RED' ? 9 : 8;
     const blueCardsCount = startingTeam === 'BLUE' ? 9 : 8;
-    const neutralCardsCount = 7;
-    const assassinCardCount = 1;
 
     let types = [];
     for (let i = 0; i < redCardsCount; i++) types.push('RED');
     for (let i = 0; i < blueCardsCount; i++) types.push('BLUE');
-    for (let i = 0; i < neutralCardsCount; i++) types.push('NEUTRAL');
-    for (let i = 0; i < assassinCardCount; i++) types.push('ASSASSIN');
+    for (let i = 0; i < 7; i++) types.push('NEUTRAL');
+    types.push('ASSASSIN');
 
     const shuffledTypes = shuffle(types);
 
@@ -53,8 +52,15 @@ function initializeGame(players) {
         word: word,
         type: shuffledTypes[index],
         revealed: false,
-        revealedBy: null // Store which team revealed it ('RED' or 'BLUE')
+        revealedBy: null
     }));
+
+    // Initial log entry
+    const startingLog = {
+        timestamp: serverTimestamp(), // Use server time
+        type: 'START',
+        text: `🆕 Game started. ${startingTeam} team goes first.`,
+    };
 
     return {
         board: board,
@@ -64,11 +70,12 @@ function initializeGame(players) {
         guessesMade: 0,
         guessesRemaining: null,
         score: {
-            red: redCardsCount, // Store cards *remaining* for each team
+            red: redCardsCount,
             blue: blueCardsCount,
         },
-        status: 'PLAYING', // LOBBY, PLAYING, RED_WON, BLUE_WON, ASSASSIN_HIT_RED, ASSASSIN_HIT_BLUE
-        votes: {},
+        status: 'PLAYING',
+        votes: {}, // Initialize votes
+        logEntries: [startingLog], // Initialize log entries array
     };
 }
 
@@ -78,91 +85,98 @@ function Game({ roomId, playerId, playerName, navigate }) {
     const [players, setPlayers] = useState({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [showSpymasterView, setShowSpymasterView] = useState(false); // Client-side toggle
+    const [showSpymasterView, setShowSpymasterView] = useState(false);
 
     const currentPlayer = players?.[playerId];
     const isSpymaster = currentPlayer?.role === 'SPYMASTER';
     const isGuesser = currentPlayer?.role === 'GUESSER';
+    // Derived state: Recalculated on each render based on current gameState and currentPlayer
     const isMyTurn = gameState?.status === 'PLAYING' && gameState?.turn === currentPlayer?.team;
+
+    // --- Helper Function to Add Log Entries ---
+    const addLogEntry = useCallback((roomIdForLog, type, text) => {
+        if (!roomIdForLog) {
+            console.error("Cannot add log entry: roomId is missing.");
+            return;
+        }
+        const logRef = getLogRef(roomIdForLog);
+        const newLogEntry = {
+            timestamp: serverTimestamp(),
+            type: type,
+            text: text,
+        };
+        // Use push to generate a unique key and add to the list
+        push(logRef, newLogEntry)
+            .catch(err => console.error("Failed to add log entry:", err));
+    }, []); // This helper doesn't depend on component state directly, only args
+
 
     // Subscribe to game state and players
     useEffect(() => {
-        const roomRef = getRoomRef(roomId);
         const gameStateRef = getGameStateRef(roomId);
         const playersRef = getPlayersRef(roomId);
 
         const unsubscribeGameState = onValue(gameStateRef, (snapshot) => {
-            setGameState(snapshot.val());
+            const data = snapshot.val();
+            // Convert logEntries object from Firebase back to array if needed
+            if (data && data.logEntries && typeof data.logEntries === 'object' && !Array.isArray(data.logEntries)) {
+                 data.logEntries = Object.entries(data.logEntries).map(([key, value]) => ({ ...value, key })); // Add key if needed
+            }
+            setGameState(data);
             setLoading(false);
         }, (err) => {
             console.error("Firebase gameState read failed:", err);
-            setError(`Failed to load game state for room ${roomId}. It might not exist or you lack permission.`);
+            setError(`Failed to load game state for room ${roomId}.`);
             setLoading(false);
         });
 
         const unsubscribePlayers = onValue(playersRef, (snapshot) => {
-            setPlayers(snapshot.val() || {}); // Ensure players is an object
+            setPlayers(snapshot.val() || {});
         }, (err) => {
             console.error("Firebase players read failed:", err);
             setError("Failed to load player list.");
         });
 
-        // Add player if they aren't listed (e.g., rejoining)
+        // Add/update player on join/rejoin
         const playerRef = getPlayerRef(roomId, playerId);
         get(playerRef).then(snapshot => {
             if (!snapshot.exists()) {
                 set(playerRef, { id: playerId, name: playerName });
-            } else {
-                // Ensure name is up-to-date if changed in lobby
-                if (snapshot.val()?.name !== playerName) {
-                    update(playerRef, { name: playerName });
-                }
+            } else if (snapshot.val()?.name !== playerName) {
+                update(playerRef, { name: playerName });
             }
         });
 
-
-        // Cleanup on unmount
         return () => {
             unsubscribeGameState();
             unsubscribePlayers();
+            // Optional: Cleanup logic if needed
         };
-    }, [roomId, playerId, playerName]); // Rerun if roomId or playerId changes
+    }, [roomId, playerId, playerName]); // Dependencies for subscriptions
 
 
     const handleRoleChange = useCallback((team, role) => {
         if (!playerId || !roomId) return;
         const playerRef = getPlayerRef(roomId, playerId);
-
-        // Create an updates object. Ensure 'role' is set to null if it's undefined/nullish.
-        const updates = {};
-        // You could also check if team is undefined, though less likely in this flow
-        if (team !== undefined) {
-            updates.team = team;
-        }
-        // This is the crucial part: convert undefined/null/'' etc. to null for Firebase
-        updates.role = role || null;
-
+        const updates = { team: team || null, role: role || null };
         update(playerRef, updates)
-            .catch(err => {
-                 console.error("Error updating role/team:", err);
-                 alert(`Failed to update team/role: ${err.message}`);
-            });
+            .catch(err => console.error("Error updating role/team:", err));
     }, [roomId, playerId]);
 
     const handleStartGame = useCallback(() => {
-        const newGameState = initializeGame(players);
+        const newGameState = initializeGame(players); // Includes starting log
         if (newGameState) {
             const gameStateRef = getGameStateRef(roomId);
             set(gameStateRef, newGameState)
+                // No separate log needed here anymore
                 .catch(err => {
                     console.error("Error starting game:", err);
                     alert("Failed to start game.");
                 });
         }
-    }, [roomId, players]);
+    }, [roomId, players]); // Removed addLogEntry dependency
 
      const handleRestartGame = useCallback(() => {
-        // Reset roles/teams but keep players
         const playerUpdates = {};
          Object.keys(players).forEach(pId => {
              playerUpdates[`${pId}/team`] = null;
@@ -170,207 +184,228 @@ function Game({ roomId, playerId, playerName, navigate }) {
          });
          update(getPlayersRef(roomId), playerUpdates);
 
-        // Reset game state to LOBBY
-        update(getGameStateRef(roomId), { status: 'LOBBY', board: null, score: null, clue: null, turn: null })
-            .catch(err => console.error("Error restarting game:", err));
-    }, [roomId, players]);
+        // Reset game state to LOBBY, clearing logs
+        update(getGameStateRef(roomId), { status: 'LOBBY', board: null, score: null, clue: null, turn: null, votes: null, logEntries: null }) // Explicitly clear logs
+             .then(() => {
+                // Optional: Log after clear if needed, but might vanish on screen change
+                // addLogEntry(roomId, 'RESTART', '🔁 Game settings reset.');
+             })
+             .catch(err => console.error("Error restarting game:", err));
+    }, [roomId, players]); // Removed addLogEntry dependency
 
     const handleClueSubmit = useCallback((clueWord, clueNumber) => {
-        console.log("handleClueSubmit triggered. Spymaster:", playerId, "Clue:", clueWord, "Number:", clueNumber);
-
         console.log("--- Debugging Clue Submit Validation ---");
-    console.log("Current Player ID:", playerId);
-    console.log("Current Player Object:", currentPlayer); // Log the whole player object
-    console.log("Is Spymaster?", isSpymaster);
-    console.log("Is My Turn?", isMyTurn);
-    console.log("Game State Object:", gameState); // Log the whole gameState
-    console.log("Game Status:", gameState?.status);
-    console.log("Current Turn:", gameState?.turn);
-    console.log("My Team:", currentPlayer?.team);
-        if (!isSpymaster || !isMyTurn || gameState.status !== 'PLAYING'){
-            console.warn("Clue submission blocked: Not spymaster's turn or invalid state."); 
-            return;
-        } 
+        console.log("Current Player ID:", playerId);
+        console.log("Current Player Object:", currentPlayer);
+        console.log("Is Spymaster?", isSpymaster);
+        console.log("Is My Turn?", isMyTurn);
+        console.log("Game State Object:", gameState);
+        console.log("Game Status:", gameState?.status);
+        console.log("Current Turn:", gameState?.turn);
+        console.log("My Team:", currentPlayer?.team);
+        console.log("--- End Debugging ---");
 
+        if (!isSpymaster || !isMyTurn || gameState?.status !== 'PLAYING') {
+            console.warn("Clue submission blocked: Not spymaster's turn or invalid state."); return;
+        }
         const clueNum = parseInt(clueNumber, 10);
-        if (!clueWord.trim() || isNaN(clueNum) || clueNum < 0) {
-            console.warn("Clue submission blocked: Invalid input.");
-        alert("Invalid clue. Enter clue word(s) and a non-negative number.");
-            return;
+        const trimmedClueWord = clueWord.trim(); // Trim here
+        if (!trimmedClueWord || isNaN(clueNum) || clueNum < 0) {
+            console.warn("Clue submission blocked: Invalid input."); alert("Invalid clue. Enter clue word(s) and a non-negative number."); return;
         }
 
         const gameStateRef = getGameStateRef(roomId);
-        const updates = {
-            clue: { word: clueWord.trim().toUpperCase(), number: clueNum, submittedBy: playerId },
-            guessesMade: 0,
-            guessesRemaining: clueNum === 0 ? 1 : clueNum + 1, // Allow 1 guess for 0 clue, else number + 1
-            votes: null // Clear votes when a new clue is submitted
-        };
+        const clueText = trimmedClueWord.toUpperCase(); // Use trimmed version for update/log
 
+        const updates = {
+            clue: { word: clueText, number: clueNum, submittedBy: playerId },
+            guessesMade: 0,
+            guessesRemaining: clueNum === 0 ? 1 : clueNum + 1,
+            votes: null // Clear votes
+        };
+        console.log("Attempting to update Firebase gameState with:", updates);
 
         update(gameStateRef, updates)
-        .then(() => {
-            console.log("Firebase gameState update successful for clue submission.");
-        })
-        .catch(err => {
-            console.error("!!!!!!!! Firebase clue update FAILED: !!!!!!!!", err);
-            alert(`Failed to submit clue. Check console for error. (${err.message})`);
-        });
+            .then(() => {
+                console.log("Firebase gameState update successful for clue submission.");
+                const playerName = currentPlayer?.name || 'Spymaster';
+                addLogEntry(roomId, 'CLUE', `🔍 ${playerName} gave clue: "${clueText} (${clueNum})"`);
+            })
+            .catch(err => {
+                console.error("!!!!!!!! Firebase clue update FAILED: !!!!!!!!", err);
+                alert(`Failed to submit clue. Check console for error. (${err.message})`);
+            });
 
-    }, [roomId, playerId, gameState, currentPlayer]);
+    }, [roomId, playerId, gameState, currentPlayer, isSpymaster, isMyTurn, addLogEntry]); // Added gameState, currentPlayer, isSpymaster, isMyTurn, addLogEntry
+
+
+    const handleVote = useCallback((cardIndex) => {
+        if (!isGuesser || !isMyTurn || gameState?.status !== 'PLAYING' || !gameState?.clue?.word) {
+             return;
+        }
+        const card = gameState?.board?.[cardIndex];
+        if (!card || card.revealed) return;
+
+        const currentVotesForCard = gameState.votes?.[cardIndex] || [];
+        const playerIndexInVotes = currentVotesForCard.indexOf(playerId);
+        let newVotesForCard;
+        let isAddingVote = false;
+
+        if (playerIndexInVotes > -1) {
+            newVotesForCard = currentVotesForCard.filter(id => id !== playerId);
+        } else {
+            newVotesForCard = [...currentVotesForCard, playerId];
+            isAddingVote = true;
+        }
+
+        const voteUpdate = {};
+        voteUpdate[`votes/${cardIndex}`] = newVotesForCard.length > 0 ? newVotesForCard : null;
+
+        update(getGameStateRef(roomId), voteUpdate)
+             .then(() => {
+                 if (isAddingVote) {
+                     const playerName = currentPlayer?.name || 'Guesser';
+                     addLogEntry(roomId, 'VOTE', `🗳️ ${playerName} voted for "${card.word}"`);
+                 }
+             })
+            .catch(err => console.error("Error updating votes:", err));
+
+    }, [roomId, gameState, isGuesser, isMyTurn, playerId, currentPlayer, addLogEntry]); // Added gameState, currentPlayer, addLogEntry
 
 
     const processConfirmedGuess = useCallback((cardIndex) => {
         const card = gameState?.board?.[cardIndex];
-        if (!card || card.revealed || gameState?.status !== 'PLAYING') return;
+        if (!card || card.revealed || gameState?.status !== 'PLAYING' || !currentPlayer || !gameState.turn) return; // Added null checks
 
         const updates = {};
         const currentTeam = gameState.turn;
         const opponentTeam = currentTeam === 'RED' ? 'BLUE' : 'RED';
         let nextTurn = currentTeam;
         let gameEndStatus = null;
-        // Guesses remaining decreases *only* on confirmation
         let remainingGuesses = (gameState.guessesRemaining ?? 0) - 1;
-        // This 'guessesMade' might track confirmed guesses per turn, or total clicks? Let's treat it as CONFIRMED guesses.
         let guessesMade = (gameState.guessesMade ?? 0) + 1;
 
-        // Reveal the card
         updates[`board/${cardIndex}/revealed`] = true;
         updates[`board/${cardIndex}/revealedBy`] = currentTeam;
-        updates['guessesMade'] = guessesMade; // Increment confirmed guesses
-        updates['votes'] = null; // <--- Clear all votes after confirmation
+        updates['guessesMade'] = guessesMade;
+        updates['votes'] = null; // Clear all votes after confirmation
 
-        // Update Score and Check Win/Loss/Turn End
-        let newScore = { ...gameState.score };
+        let revealLogText = '';
+        const guesserName = currentPlayer?.name || 'Guesser';
+        const cardWord = card.word;
+        const cardType = card.type;
 
-        if (card.type === currentTeam) {
+        let newScore = { ...(gameState.score || { red: 0, blue: 0 }) }; // Handle case where score might be null temporarily
+
+        if (cardType === currentTeam) {
             newScore[currentTeam.toLowerCase()]--;
             updates['score'] = newScore;
-            if (newScore[currentTeam.toLowerCase()] === 0) {
+            revealLogText = `🎯 ${guesserName} selected "${cardWord}" - Correct! (${currentTeam})`;
+            if (newScore[currentTeam.toLowerCase()] <= 0) {
                 gameEndStatus = `${currentTeam}_WON`;
-            } else if (remainingGuesses <= 0) { // Check if guesses are exhausted AFTER this guess
-                nextTurn = opponentTeam; // End turn if out of guesses
+                revealLogText += `. ${currentTeam} team wins!`;
+            } else if (remainingGuesses <= 0) {
+                nextTurn = opponentTeam;
+                revealLogText += `. Turn passes to ${opponentTeam}.`;
             }
-            // else: continue guessing
-        } else if (card.type === opponentTeam) {
+        } else if (cardType === opponentTeam) {
             newScore[opponentTeam.toLowerCase()]--;
             updates['score'] = newScore;
-            nextTurn = opponentTeam; // End turn
-            if (newScore[opponentTeam.toLowerCase()] === 0) {
-                gameEndStatus = `${opponentTeam}_WON`; // Opponent wins
+            revealLogText = `😩 ${guesserName} selected "${cardWord}" - Opponent's Agent! (${opponentTeam})`;
+            nextTurn = opponentTeam;
+            revealLogText += `. Turn passes to ${opponentTeam}.`;
+            if (newScore[opponentTeam.toLowerCase()] <= 0) {
+                gameEndStatus = `${opponentTeam}_WON`;
+                 revealLogText += ` ${opponentTeam} team wins!`;
             }
-        } else if (card.type === 'NEUTRAL') {
-            nextTurn = opponentTeam; // End turn
-        } else if (card.type === 'ASSASSIN') {
-            gameEndStatus = `ASSASSIN_HIT_${currentTeam}`; // Team that clicked loses
-            nextTurn = null; // No next turn
+        } else if (cardType === 'NEUTRAL') {
+            revealLogText = `😐 ${guesserName} selected "${cardWord}" - Neutral Bystander.`;
+            nextTurn = opponentTeam;
+            revealLogText += ` Turn passes to ${opponentTeam}.`;
+        } else if (cardType === 'ASSASSIN') {
+             revealLogText = `☠️ ${guesserName} selected the Assassin ("${cardWord}")! ${opponentTeam} team wins!`;
+            gameEndStatus = `ASSASSIN_HIT_${currentTeam}`;
+            nextTurn = null;
         }
 
-        // Apply game end status if applicable
         if (gameEndStatus) {
             updates['status'] = gameEndStatus;
             updates['clue'] = { word: null, number: null, submittedBy: null };
             updates['guessesRemaining'] = null;
             updates['turn'] = null;
-            updates['guessesMade'] = 0; // Reset on game end
+            updates['guessesMade'] = 0;
         } else {
-            // If turn changes, reset clue and guesses
             if (nextTurn !== currentTeam) {
                 updates['turn'] = nextTurn;
                 updates['clue'] = { word: null, number: null, submittedBy: null };
                 updates['guessesRemaining'] = null;
-                updates['guessesMade'] = 0; // Reset guesses made for next turn
+                updates['guessesMade'] = 0;
             } else {
-                 // Only update remaining guesses if turn doesn't change
                  updates['guessesRemaining'] = remainingGuesses;
             }
         }
 
-        // Perform the update
         update(getGameStateRef(roomId), updates)
-            .catch(err => console.error("Error processing guess:", err));
+            .then(() => {
+                if (revealLogText) {
+                     addLogEntry(roomId, 'REVEAL', revealLogText);
+                }
+            })
+            .catch(err => console.error("Error processing confirmed guess:", err));
 
-    }, [roomId, gameState]);
-
-
-    const handleVote = useCallback((cardIndex) => {
-        if (!isGuesser || !isMyTurn || gameState.status !== 'PLAYING' || !gameState.clue?.word) {
-            console.log("Cannot vote now");
-            return; // Only active guessers on their turn with a clue can vote
-        }
-
-        const card = gameState?.board?.[cardIndex];
-        if (!card || card.revealed) return; // Can't vote on revealed cards
-
-        const currentVotesForCard = gameState.votes?.[cardIndex] || [];
-        const playerIndexInVotes = currentVotesForCard.indexOf(playerId);
-        let newVotesForCard;
-
-        if (playerIndexInVotes > -1) {
-            // Player already voted for this card, remove vote (unvote)
-            newVotesForCard = currentVotesForCard.filter(id => id !== playerId);
-        } else {
-            // Player hasn't voted for this card, add vote
-            newVotesForCard = [...currentVotesForCard, playerId];
-        }
-
-        // Prepare update for Firebase
-        const voteUpdate = {};
-        // Use null to remove the node if the array becomes empty, cleaning up Firebase
-        voteUpdate[`votes/${cardIndex}`] = newVotesForCard.length > 0 ? newVotesForCard : null;
-
-        update(getGameStateRef(roomId), voteUpdate)
-            .catch(err => console.error("Error updating votes:", err));
-
-    }, [roomId, gameState, isGuesser, isMyTurn, playerId]);
+    }, [roomId, gameState, currentPlayer, addLogEntry]); // Added gameState, currentPlayer, addLogEntry
 
 
     const handleEndTurn = useCallback(() => {
-         if (!isGuesser || !isMyTurn || gameState.status !== 'PLAYING' || !gameState.clue?.word) return;
+         if (!isGuesser || !isMyTurn || gameState?.status !== 'PLAYING' || !gameState?.clue?.word) return;
 
-         const opponentTeam = gameState.turn === 'RED' ? 'BLUE' : 'RED';
+         const currentTeam = gameState.turn;
+         const opponentTeam = currentTeam === 'RED' ? 'BLUE' : 'RED';
          update(getGameStateRef(roomId), {
              turn: opponentTeam,
              clue: { word: null, number: null, submittedBy: null },
              guessesRemaining: null,
              guessesMade: 0,
-             votes: null
+             votes: null // Clear votes
+         }).then(() => {
+            const playerName = currentPlayer?.name || 'Guesser';
+            addLogEntry(roomId, 'TURN', `✋ ${playerName} ended ${currentTeam}'s turn. Passing to ${opponentTeam}.`);
          }).catch(err => console.error("Error ending turn:", err));
-    }, [roomId, gameState, isGuesser, isMyTurn]);
+    }, [roomId, gameState, isGuesser, isMyTurn, currentPlayer, addLogEntry]); // Added gameState, currentPlayer, addLogEntry
 
-    const handleLeaveRoom = () => {
+
+    const handleLeaveRoom = useCallback(() => {
         const playerRef = getPlayerRef(roomId, playerId);
         remove(playerRef).then(() => {
-            navigate('/'); // Go back to lobby
+            navigate('/');
         }).catch(err => console.error("Error leaving room:", err));
-        // Consider logic to delete the room if it becomes empty
-    };
+        // Consider adding logic to remove room if empty
+    }, [roomId, playerId, navigate]);
 
 
     // --- Rendering Logic ---
 
     if (loading) return <div className="text-center text-xl font-semibold">Loading Game...</div>;
     if (error) return <div className="text-center text-red-600 bg-red-100 p-4 rounded border border-red-300">{error} <button onClick={() => navigate('/')} className="ml-4 px-2 py-1 bg-red-500 text-white rounded text-sm">Go Back</button></div>;
-    if (!gameState) return <div className="text-center text-yellow-600">Waiting for game data...</div>; // Should be handled by loading/error
+    if (!gameState && !loading) return <div className="text-center text-yellow-600">Waiting for game data... (Room might be empty or invalid)</div>; // Handle case where gameState remains null
 
-    const canStartGame = Object.values(players).length >= 4 &&
+
+    // --- LOBBY STATE ---
+    if (gameState?.status === 'LOBBY' || !gameState?.status) { // Check if gameState or status is null/undefined
+        const canStartGame = Object.values(players).length >= 4 &&
                          Object.values(players).some(p => p.team === 'RED' && p.role === 'SPYMASTER') &&
                          Object.values(players).some(p => p.team === 'BLUE' && p.role === 'SPYMASTER') &&
                          Object.values(players).some(p => p.team === 'RED' && p.role === 'GUESSER') &&
                          Object.values(players).some(p => p.team === 'BLUE' && p.role === 'GUESSER');
-
-
-    // --- Render different states ---
-
-    if (gameState.status === 'LOBBY') {
         return (
-            <div className="max-w-4xl mx-auto">
+             <div className="max-w-4xl mx-auto">
                 <h2 className="text-2xl font-bold mb-4 text-center">Game Lobby - Room Code: <span className="font-mono bg-gray-200 px-2 py-1 rounded">{roomId}</span></h2>
                 <div className="grid md:grid-cols-2 gap-6">
                     <RoleSelector players={players} playerId={playerId} onRoleChange={handleRoleChange} />
                     <div className="bg-white p-6 rounded shadow">
+                       {/* ... Player list display ... */}
                        <h3 className="text-lg font-semibold mb-3 border-b pb-2">Players in Room:</h3>
-                        <ul className="space-y-2">
+                        <ul className="space-y-2 max-h-60 overflow-y-auto"> {/* Added max-height and scroll */}
                             {Object.values(players).map(p => (
                                 <li key={p.id} className={`flex justify-between items-center p-2 rounded ${p.id === playerId ? 'bg-blue-100' : ''}`}>
                                     <span className="font-medium">{p.name} {p.id === playerId ? '(You)' : ''} {p.isHost ? '👑' : ''}</span>
@@ -395,12 +430,8 @@ function Game({ roomId, playerId, playerName, navigate }) {
                                 {canStartGame ? 'Start Game' : 'Need 1 Spymaster & 1 Guesser per team (min 4 players)'}
                             </button>
                          )}
-                          {!currentPlayer?.isHost && !canStartGame && (
-                              <p className="mt-6 text-center text-gray-500">Waiting for Host to start the game (requires valid team/role setup).</p>
-                          )}
-                           {!currentPlayer?.isHost && canStartGame && (
-                              <p className="mt-6 text-center text-green-600 font-semibold">Ready to start! Waiting for Host.</p>
-                           )}
+                          {!currentPlayer?.isHost && !canStartGame && ( <p className="mt-6 text-center text-gray-500">Waiting for Host (requires valid team/role setup).</p> )}
+                          {!currentPlayer?.isHost && canStartGame && ( <p className="mt-6 text-center text-green-600 font-semibold">Ready! Waiting for Host.</p> )}
                     </div>
                 </div>
                  <button onClick={handleLeaveRoom} className="mt-8 block mx-auto bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">
@@ -410,12 +441,13 @@ function Game({ roomId, playerId, playerName, navigate }) {
         );
     }
 
+    // --- GAME OVER STATE ---
      if (gameState.status !== 'PLAYING') {
         return (
             <GameOver
                 status={gameState.status}
                 startingTeam={gameState.startingTeam}
-                board={gameState.board}
+                board={gameState.board} // Pass board for display
                 onRestart={handleRestartGame}
                 onLeave={handleLeaveRoom}
                 isHost={currentPlayer?.isHost}
@@ -423,9 +455,10 @@ function Game({ roomId, playerId, playerName, navigate }) {
         );
     }
 
-    // --- Render main game view ---
+    // --- PLAYING STATE ---
     return (
-        <div className="flex flex-col h-full">
+        // Added height constraints and flex direction
+        <div className="flex flex-col h-full max-h-screen overflow-hidden">
             <Controls
                 gameState={gameState}
                 currentPlayer={currentPlayer}
@@ -438,23 +471,41 @@ function Game({ roomId, playerId, playerName, navigate }) {
                 onToggleSpymasterView={() => isSpymaster && setShowSpymasterView(!showSpymasterView)}
                 roomId={roomId}
             />
-            <GameBoard
-                board={gameState.board}
-                onVote={handleVote} // PROP for voting
-                onConfirmGuess={processConfirmedGuess} // <--- PROP for confirming
-                votes={gameState.votes || {}} // <--- Pass current votes
-                players={players} // <--- Pass players map for names
-                playerId={playerId} // <--- Pass current player ID
-                isSpymaster={isSpymaster}
-                showSpymasterView={showSpymasterView}
-                isGuesser={isGuesser}
-                canVoteOrGuess={isMyTurn && isGuesser && !!gameState.clue?.word && (gameState.guessesRemaining ?? 0) > 0}
-                currentTurnTeam={gameState.turn} // Pass current turn team for highlighting
-            />
-             <button onClick={handleLeaveRoom} className="mt-8 block mx-auto bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">
-                Leave Room
-            </button>
-            {/* Display player list during game, will implement later */}
+
+            {/* Main Game Area: Board + Log */}
+            <div className="flex-grow flex flex-row gap-4 overflow-hidden p-1"> {/* Ensure horizontal layout */}
+
+                {/* Game Board */}
+                <div className="flex-grow w-3/4 overflow-y-auto"> {/* Allow board area to scroll if needed */}
+                     <GameBoard
+                        board={gameState.board}
+                        onVote={handleVote} // Use onVote
+                        onConfirmGuess={processConfirmedGuess} // Use onConfirmGuess
+                        votes={gameState.votes || {}}
+                        players={players} // Pass players map for names in Card votes
+                        playerId={playerId} // Pass current player ID
+                        isSpymaster={isSpymaster}
+                        showSpymasterView={showSpymasterView}
+                        isGuesser={isGuesser}
+                        // Renamed prop for clarity
+                        canVoteOrGuess={isMyTurn && isGuesser && !!gameState.clue?.word && (gameState.guessesRemaining ?? 0) > 0}
+                        currentTurnTeam={gameState.turn}
+                     />
+                 </div>
+
+                 {/* Action Log Sidebar */}
+                 <div className="w-1/4 flex-shrink-0 h-full overflow-hidden"> {/* Prevent log from shrinking, manage overflow */}
+                     <ActionLog logEntries={gameState.logEntries} />
+                 </div>
+
+            </div>
+
+             {/* Leave Room button - positioned below the main game area */}
+             <div className="flex-shrink-0 p-2 text-center">
+                 <button onClick={handleLeaveRoom} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">
+                    Leave Room
+                 </button>
+             </div>
         </div>
     );
 }
