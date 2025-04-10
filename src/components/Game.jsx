@@ -384,6 +384,54 @@ function Game({ roomId, playerId, playerName, navigate }) {
     }, [roomId, playerId, navigate]);
 
 
+    const handleSwitchTeam = useCallback(() => {
+        if (!currentPlayer || !currentPlayer.team || !currentPlayer.role) {
+            console.warn("Switch Team blocked: Player has no team/role assigned yet.");
+            return; // Cannot switch if not fully assigned
+        }
+    
+        // Optional restriction: Prevent switching while a clue is active?
+        // if (gameState?.clue?.word) {
+        //     alert("Cannot switch teams while a clue is active.");
+        //     return;
+        // }
+    
+        const currentTeam = currentPlayer.team;
+        const currentRole = currentPlayer.role;
+        const newTeam = currentTeam === 'RED' ? 'BLUE' : 'RED';
+    
+        // --- Spymaster Collision Check ---
+        if (currentRole === 'SPYMASTER') {
+            const existingSpymasterOnNewTeam = Object.values(players).find(
+                p => p.team === newTeam && p.role === 'SPYMASTER'
+            );
+            if (existingSpymasterOnNewTeam) {
+                alert(`Cannot switch: Team ${newTeam} already has a Spymaster (${existingSpymasterOnNewTeam.name}). Ask them to switch roles first if you want to be the Spymaster.`);
+                return; // Block the switch
+            }
+            // If no collision, the player remains Spymaster on the new team
+        }
+        // If the player is a Guesser, they just become a Guesser on the new team.
+    
+        // --- Prepare and Execute Update ---
+        const playerRef = getPlayerRef(roomId, playerId);
+        const updates = { team: newTeam }; // Role stays the same
+    
+        update(playerRef, updates)
+            .then(() => {
+                console.log(`Player ${currentPlayer.name} switched to team ${newTeam}`);
+                // Optional: Log the action
+                addLogEntry(roomId, 'SWITCH', `🔄 ${currentPlayer.name} switched from ${currentTeam} to ${newTeam}`);
+            })
+            .catch(err => {
+                console.error("Error switching team:", err);
+                alert("Failed to switch team. Please try again.");
+            });
+    
+    // Add `players` to dependency array as we check it for spymaster collision
+    }, [roomId, playerId, currentPlayer, players, gameState, addLogEntry]);
+
+
     // --- Rendering Logic ---
 
     if (loading) return <div className="text-center text-xl font-semibold">Loading Game...</div>;
@@ -492,6 +540,8 @@ function Game({ roomId, playerId, playerName, navigate }) {
                             players={players}
                             score={gameState.score?.red ?? '?'}
                             isCurrentTurn={gameState.turn === 'RED'}
+                            playerId={playerId}
+                            onSwitchTeam={handleSwitchTeam}
                         />
                     </div>
     
@@ -523,6 +573,8 @@ function Game({ roomId, playerId, playerName, navigate }) {
                             players={players}
                             score={gameState.score?.blue ?? '?'}
                             isCurrentTurn={gameState.turn === 'BLUE'}
+                            playerId={playerId}
+                            onSwitchTeam={handleSwitchTeam}
                         />
                     </div>
     
