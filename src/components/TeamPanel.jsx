@@ -2,10 +2,9 @@ import React from 'react';
 import { ArrowPathIcon } from '@heroicons/react/24/outline';
 
 // Simple placeholder for an avatar area
-const AvatarPlaceholder = ({ teamColor }) => (
-    <div className={`w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center mb-2 md:mb-4 shadow-md ${teamColor === 'RED' ? 'bg-red-900' : 'bg-blue-900'}`}>
-        {/* You could add initials or a default icon here */}
-        <span className="text-2xl font-bold opacity-50">?</span>
+const AvatarPlaceholder = ({ teamColor, score = '?' }) => (
+    <div className={`w-16 h-16 md:w-20 md:h-20 rounded-full flex items-center justify-center mb-2 md:mb-4 shadow-md text-3xl md:text-4xl font-bold ${teamColor === 'RED' ? 'bg-red-900' : 'bg-blue-900'}`}>
+        {score}
     </div>
 );
 
