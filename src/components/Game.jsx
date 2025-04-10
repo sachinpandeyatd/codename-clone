@@ -8,6 +8,7 @@ import GameOver from './GameOver';
 import ActionLog from './ActionLog';
 import wordsData from '../words.json';
 import { HandRaisedIcon } from '@heroicons/react/24/solid';
+import TeamPanel from './TeamPanel';
 
 // Fisher-Yates shuffle algorithm
 function shuffle(array) {
@@ -455,59 +456,97 @@ function Game({ roomId, playerId, playerName, navigate }) {
         );
     }
 
-    // --- PLAYING STATE ---
-    return (
-        // Added height constraints and flex direction
-        <div className="flex flex-col h-full max-h-screen overflow-hidden">
-            <Controls
-                gameState={gameState}
-                currentPlayer={currentPlayer}
-                players={players}
-                isSpymaster={isSpymaster}
-                isMyTurn={isMyTurn}
-                showSpymasterView={showSpymasterView}
-                onClueSubmit={handleClueSubmit}
-                onEndTurn={handleEndTurn}
-                onToggleSpymasterView={() => isSpymaster && setShowSpymasterView(!showSpymasterView)}
-                roomId={roomId}
-            />
-
-            {/* Main Game Area: Board + Log */}
-            <div className="flex-grow flex flex-row gap-4 overflow-hidden p-1"> {/* Ensure horizontal layout */}
-
-                {/* Game Board */}
-                <div className="flex-grow w-3/4 overflow-y-auto"> {/* Allow board area to scroll if needed */}
-                     <GameBoard
-                        board={gameState.board}
-                        onVote={handleVote} // Use onVote
-                        onConfirmGuess={processConfirmedGuess} // Use onConfirmGuess
-                        votes={gameState.votes || {}}
-                        players={players} // Pass players map for names in Card votes
-                        playerId={playerId} // Pass current player ID
+    if (gameState?.status === 'PLAYING') {
+        return (
+            // Use h-screen for full viewport height, flex-col for main layout
+            <div className="flex flex-col h-screen overflow-hidden bg-gray-200">
+    
+                {/* Controls Section - Fixed Height */}
+                <div className="flex-shrink-0">
+                    <Controls
+                        // ... props
+                        gameState={gameState}
+                        currentPlayer={currentPlayer}
+                        players={players}
                         isSpymaster={isSpymaster}
+                        isMyTurn={isMyTurn}
                         showSpymasterView={showSpymasterView}
-                        isGuesser={isGuesser}
-                        // Renamed prop for clarity
-                        canVoteOrGuess={isMyTurn && isGuesser && !!gameState.clue?.word && (gameState.guessesRemaining ?? 0) > 0}
-                        currentTurnTeam={gameState.turn}
-                     />
+                        onClueSubmit={handleClueSubmit}
+                        onEndTurn={handleEndTurn}
+                        onToggleSpymasterView={() => isSpymaster && setShowSpymasterView(!showSpymasterView)}
+                        roomId={roomId}
+                    />
+                </div>
+    
+                {/* Main Content Area (Panels, Board, Log) - Takes Remaining Height */}
+                {/* flex-grow allows this div to fill space, flex-row for horizontal items */}
+                {/* overflow-hidden prevents this row itself from causing page scroll */}
+                {/* min-h-0 is CRUCIAL for flex children that need to scroll */}
+                <div className="flex-grow flex flex-row gap-2 md:gap-4 overflow-hidden p-2 md:p-4 min-h-0">
+    
+                    {/* Red Team Panel - Fixed width, allow internal scroll if needed */}
+                    {/* Removed h-full, added min-h-0 */}
+                    <div className="w-48 md:w-56 lg:w-64 flex-shrink-0 min-h-0"> {/* Example: Use fixed widths */}
+                        <TeamPanel
+                            teamColor="RED"
+                            players={players}
+                            score={gameState.score?.red ?? '?'}
+                            isCurrentTurn={gameState.turn === 'RED'}
+                        />
+                    </div>
+    
+                    {/* Game Board Area - Flexible width, allow internal scroll */}
+                    {/* flex-grow lets it take space, flex-col for board layout, overflow-y-auto */}
+                    {/* min-h-0 allows it to shrink properly */}
+                    <div className="flex-grow flex flex-col overflow-y-auto min-h-0">
+                         <GameBoard
+                            // Pass necessary props for GameBoard
+                            board={gameState.board}
+                            onVote={handleVote}
+                            onConfirmGuess={processConfirmedGuess}
+                            votes={gameState.votes || {}}
+                            players={players}
+                            playerId={playerId}
+                            isSpymaster={isSpymaster}
+                            showSpymasterView={showSpymasterView}
+                            isGuesser={isGuesser}
+                            canVoteOrGuess={isMyTurn && isGuesser && !!gameState.clue?.word && (gameState.guessesRemaining ?? 0) > 0}
+                            currentTurnTeam={gameState.turn}
+                         />
+                     </div>
+    
+                    {/* Blue Team Panel - Fixed width */}
+                    {/* Removed h-full, added min-h-0 */}
+                     <div className="w-48 md:w-56 lg:w-64 flex-shrink-0 min-h-0"> {/* Example: Use fixed widths */}
+                        <TeamPanel
+                            teamColor="BLUE"
+                            players={players}
+                            score={gameState.score?.blue ?? '?'}
+                            isCurrentTurn={gameState.turn === 'BLUE'}
+                        />
+                    </div>
+    
+                     {/* Action Log Sidebar - Fixed width */}
+                     {/* Removed h-full, added min-h-0 */}
+                     {/* overflow-hidden okay here if ActionLog handles internal scroll */}
+                     <div className="w-56 md:w-64 lg:w-72 flex-shrink-0 min-h-0"> {/* Example: Use fixed widths */}
+                         <ActionLog logEntries={gameState.logEntries} />
+                     </div>
+    
+                </div>
+    
+                 {/* Leave Room button - Fixed Height */}
+                 <div className="flex-shrink-0 p-2 text-center">
+                     <button onClick={handleLeaveRoom} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">
+                        Leave Room
+                     </button>
                  </div>
-
-                 {/* Action Log Sidebar */}
-                 <div className="w-1/4 flex-shrink-0 h-full overflow-hidden"> {/* Prevent log from shrinking, manage overflow */}
-                     <ActionLog logEntries={gameState.logEntries} />
-                 </div>
-
             </div>
+        );
+    }
 
-             {/* Leave Room button - positioned below the main game area */}
-             <div className="flex-shrink-0 p-2 text-center">
-                 <button onClick={handleLeaveRoom} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">
-                    Leave Room
-                 </button>
-             </div>
-        </div>
-    );
+    // Fallback or handle cases where gameState might still be null after loading
+    return <div className="text-center text-gray-500">Loading or initializing game...</div>;
 }
 
 export default Game;
